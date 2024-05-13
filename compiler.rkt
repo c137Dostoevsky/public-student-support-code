@@ -58,10 +58,13 @@
   (lambda (e)
     (match e
       [(Var x)
-       (error "TODO: code goes here (uniquify-exp Var)")]
+       (Var (dict-ref env x))]
       [(Int n) (Int n)]
       [(Let x e body)
-       (error "TODO: code goes here (uniquify-exp Let)")]
+        (let* ([new-sym (gensym x)]
+               [new-env (dict-set env x new-sym)])
+          (Let new-sym ((uniquify-exp env) e)
+               ((uniquify-exp new-env) body)))]
       [(Prim op es)
        (Prim op (for/list ([e es]) ((uniquify-exp env) e)))])))
 
@@ -70,13 +73,66 @@
   (match p
     [(Program info e) (Program info ((uniquify-exp '()) e))]))
 
+(define rco-atom
+  (lambda (exp)
+    (match exp
+      [(Var x) (values (Var x) '())]
+      [(Int n) (values (Int n) '())]
+      [(Let x e body)
+       (define-values (body-list alist) (rco-atom body))
+       (let* ([new-e (rco-exp e)]
+              [a-alist (append* alist)]
+              [new-alist (dict-set a-alist x new-e)])
+         (values body-list new-alist))]
+      [(Prim op es)
+        (define-values (elist alist) (for/lists (list1 list2) ([e es]) (rco-atom e)))
+        (let* ([new-sym (gensym 'tmp)]
+               [a-alist (append* alist)]
+               [new-alist (dict-set a-alist new-sym (Prim op elist))])
+             (values (Var new-sym) new-alist))])))
+
+(define rco-exp
+  (lambda (exp)
+    (match exp
+      [(Var x) (Var x)]
+      [(Int n) (Int n)]
+      [(Let x e body)
+        (Let x (rco-exp e) (rco-exp body))]
+      [(Prim op es)
+       (define-values (elist alist) (for/lists (list1 list2) ([e es]) (rco-atom e)))
+       (let ([new-alist (append* alist)])
+         (make-lets new-alist elist))])))
+
 ;; remove-complex-opera* : Lvar -> Lvar^mon
 (define (remove-complex-opera* p)
-  (error "TODO: code goes here (remove-complex-opera*)"))
+  (match p
+    [(Program info e) (Program info (rco-exp e))]))
+
+(define (explicate_tail e)
+  (match e
+    [(Var x) (Return (Var x))]
+    [(Int n) (Return (Int n))]
+    [(Let x rhs body)
+     (let [tail (explicate_tail body)]
+       (explicate_assign rhs x tail))]
+    [(Prim op es) (Return (Prim op es))]
+    [else (error "explicate_tail unhandled case" e)]))
+
+(define (explicate_assign e x cont)
+  (match e
+    [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
+    [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
+    [(Let y rhs body)
+     (let* ([tail (explicate_tail body)]
+            [new-cont (explicate_assign tail x cont)])
+       (explicate_assign rhs y new-cont))]
+    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) cont)]
+    [else (error "explicate_assign unhandled case" e)]))
 
 ;; explicate-control : Lvar^mon -> Cvar
 (define (explicate-control p)
-  (error "TODO: code goes here (explicate-control)"))
+  (match p
+    [(Program info body) (CProgram info (('start . (explicate_tail body))))]))
 
 ;; select-instructions : Cvar -> x86var
 (define (select-instructions p)
@@ -100,9 +156,9 @@
 (define compiler-passes
   `(
      ;; Uncomment the following passes as you finish them.
-     ;; ("uniquify" ,uniquify ,interp-Lvar ,type-check-Lvar)
-     ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
-     ;; ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
+     ("uniquify" ,uniquify ,interp-Lvar ,type-check-Lvar)
+     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
+     ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
      ;; ("instruction selection" ,select-instructions ,interp-x86-0)
      ;; ("assign homes" ,assign-homes ,interp-x86-0)
      ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
